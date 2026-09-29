@@ -3,16 +3,19 @@ from __future__ import annotations
 import os
 from contextlib import asynccontextmanager
 
+import re
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from structlog.contextvars import bind_contextvars
 
 from .agent import LabAgent
+from .audit import audit_incident_toggle, audit_pii_detected
 from .incidents import disable, enable, status
 from .logging_config import configure_logging, get_logger
 from .metrics import record_error, snapshot
 from .middleware import CorrelationIdMiddleware
-from .pii import hash_user_id, summarize_text
+from .pii import PII_PATTERNS, hash_user_id, summarize_text
 from .schemas import ChatRequest, ChatResponse
 from .tracing import tracing_enabled
 
@@ -48,8 +51,24 @@ async def metrics() -> dict:
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: Request, body: ChatRequest) -> ChatResponse:
-    # TODO: Enrich logs with request context (user_id_hash, session_id, feature, model, env)
-    # bind_contextvars(...)
+    bind_contextvars(
+        user_id_hash=hash_user_id(body.user_id),
+        session_id=body.session_id,
+        feature=body.feature,
+        model=agent.model,
+        env=os.getenv("APP_ENV", "dev"),
+    )
+
+    # Compliance audit: detect and record PII redaction event
+    detected_pii = [name for name, pattern in PII_PATTERNS.items() if re.search(pattern, body.message)]
+    if detected_pii:
+        client_ip = request.client.host if request.client else "127.0.0.1"
+        audit_pii_detected(
+            user_id_hash=hash_user_id(body.user_id),
+            client_ip=client_ip,
+            correlation_id=request.state.correlation_id,
+            pii_types=detected_pii,
+        )
     
     log.info(
         "request_received",
@@ -102,9 +121,11 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
 
 
 @app.post("/incidents/{name}/enable")
-async def enable_incident(name: str) -> JSONResponse:
+async def enable_incident(name: str, request: Request) -> JSONResponse:
     try:
         enable(name)
+        client_ip = request.client.host if request.client else "127.0.0.1"
+        audit_incident_toggle(name, "ENABLE", client_ip=client_ip)
         log.warning("incident_enabled", service="control", payload={"name": name})
         return JSONResponse({"ok": True, "incidents": status()})
     except KeyError as exc:
@@ -112,9 +133,11 @@ async def enable_incident(name: str) -> JSONResponse:
 
 
 @app.post("/incidents/{name}/disable")
-async def disable_incident(name: str) -> JSONResponse:
+async def disable_incident(name: str, request: Request) -> JSONResponse:
     try:
         disable(name)
+        client_ip = request.client.host if request.client else "127.0.0.1"
+        audit_incident_toggle(name, "DISABLE", client_ip=client_ip)
         log.warning("incident_disabled", service="control", payload={"name": name})
         return JSONResponse({"ok": True, "incidents": status()})
     except KeyError as exc:

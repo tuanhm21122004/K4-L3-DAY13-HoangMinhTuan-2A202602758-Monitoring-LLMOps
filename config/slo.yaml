@@ -7,7 +7,12 @@ primary_slo:
     total_event: 'event == "request_received"'
   target_percent: 99.5
   error_budget_percent: 0.5
-  note: Học viên phải giải thích hoặc điều chỉnh ngưỡng bằng baseline của mình.
+  note: >
+    Baseline thực tế đo được trên workload tiêu chuẩn:
+    Latency P50 = 151ms, Latency P95 = 152ms, TTFT P95 = 50ms, Error rate = 0%, Retrieval success = 100%.
+    Ngưỡng 3000ms (3.0s) gấp ~20 lần P95 bình thường, đủ dung sai cho tail latency mạng và cold start
+    nhưng kịp thời bảo vệ trải nghiệm người dùng không bị treo.
+    Target 99.5% tương ứng với Error Budget 0.5% (tối đa 1 request lỗi hoặc chậm trên mỗi 200 requests).
 guardrails:
   error_rate_pct_max: 2
   daily_cost_usd_max: 2.5

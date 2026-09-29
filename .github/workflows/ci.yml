@@ -1,0 +1,46 @@
+name: CI - Day 13 Monitoring & LLMOps
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install matplotlib
+
+      - name: Copy .env.example to .env
+        run: cp .env.example .env
+
+      - name: Run Secret and PII Scanner
+        run: python scripts/scan_secrets_pii.py
+
+      - name: Run Pytest
+        run: python -m pytest -v
+
+      - name: Validate Dashboard Contract
+        run: python scripts/validate_dashboard.py
+
+      - name: Start API and Run Baseline End-to-End
+        run: |
+          uvicorn app.main:app --port 8000 --env-file .env &
+          sleep 3
+          python scripts/load_test.py
+          python scripts/validate_logs.py
+          python scripts/query_audit.py --verify
+          python scripts/generate_dashboard.py
